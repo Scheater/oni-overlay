@@ -51,5 +51,31 @@ namespace overlay
 	bool scale();
 	void click_through(bool click);
 
+	void draw_gui(); // Declaration added to match implementation
+
 	void loop();
+
+	// ----- Zustand (entspricht den C#-Eigenschaften) -----
+	inline std::vector<std::string> ActiveFeatures;
+	inline bool IsFeatureListVisible = true;
+	inline int FeatureTextSize = 14;
+	inline ImU32 FeatureTextColor = IM_COL32(255,255,255,255);
+
+	inline bool IsWatermarkVisible = false;
+	inline std::string WatermarkText = "OniV2";
+	inline int WatermarkSize = 20;
+	inline ImU32 WatermarkColor = IM_COL32(255,255,255,255);
+
+	// Crosshair/display settings available to other units
+	inline int CrosshairSize = 18;        // Radius / half length
+	inline int LineThickness = 3;
+	inline ImU32 CrosshairColor = IM_COL32(255,255,255,255);
+	inline std::string CrosshairShape = "Dot"; // "Dot","Plus","Cross","Triangle","Pinwheel","Windmill1954"
+
+	inline bool IsRotating = false;
+	inline float RotationAngleDeg = 0.0f; // used when rotating
+	inline bool RainbowCrosshair = false;
+
+	// Constant for PI
+	inline constexpr double PI_DOUBLE = 3.14159265358979323846;
 }

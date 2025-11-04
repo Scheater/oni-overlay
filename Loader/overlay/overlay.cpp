@@ -1,406 +1,361 @@
-#include "overlay.h"
-
+#pragma once
+#include <iostream>
+#include <vector>
 #include <string>
+#define _USE_MATH_DEFINES
 #include <cmath>
+#include <algorithm>
+#include <chrono>
 
+#include <dwmapi.h>
 
-extern "C"
+#include "menu/menu.h"
+
+#include <d3d11.h>
+
+#include <imgui.h>
+#include <imgui_impl_dx11.h>
+#include <imgui_impl_win32.h>
+#include <imgui_internal.h>
+
+// Fonts (wie gehabt)
+inline ImFont* g_titleFont = nullptr;
+inline ImFont* g_tabFont = nullptr;
+inline ImFont* g_defaultFont = nullptr;
+inline ImFont* g_drawFont = nullptr;
+
+extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam);
+
+namespace window
 {
-    __declspec(dllexport) DWORD NvOptimusEnablement = 0x00000001;
-    __declspec(dllexport) int AmdPowerXpressRequestHighPerformance = 1;
+    inline HWND hwnd;
+    inline HINSTANCE instance;
+    inline uint32_t width, height;
+
+    namespace directx
+    {
+        inline ID3D11Device* device = nullptr;
+        inline ID3D11DeviceContext* context = nullptr;
+        inline IDXGISwapChain* swap_chain = nullptr;
+        inline ID3D11RenderTargetView* render_target_view = nullptr;
+    }
+
+    LRESULT WINAPI WndProc(HWND hWnd, UINT Msg, WPARAM wParam, LPARAM lParam);
+    void cleanup();
+    bool create_window();
+    bool create_device();
+    void new_frame();
+    void draw();
 }
 
-LRESULT WINAPI window::WndProc(HWND hWnd, UINT Msg, WPARAM wParam, LPARAM lParam)
+namespace overlay
 {
-    if (ImGui_ImplWin32_WndProcHandler(hWnd, Msg, wParam, lParam))
+    inline HWND target;
+    inline uint32_t width, height;
+
+    bool initialize(HWND window);
+    bool scale();
+    void click_through(bool click);
+    void draw_gui();
+    void loop();
+
+    // ----- Zustand (entspricht den C#-Eigenschaften) -----
+    inline std::vector<std::string> ActiveFeatures;
+    inline bool IsFeatureListVisible = true;
+    inline int FeatureTextSize = 14;
+    inline ImU32 FeatureTextColor = IM_COL32(255,255,255,255);
+
+    inline bool IsWatermarkVisible = false;
+    inline std::string WatermarkText = "OniV2";
+    inline int WatermarkSize = 20;
+    inline ImU32 WatermarkColor = IM_COL32(255,255,255,255);
+
+    // Crosshair/display settings available to other units
+    inline int CrosshairSize = 18;        // Radius / halbe Linienstrecke
+    inline int LineThickness = 3;
+    inline ImU32 CrosshairColor = IM_COL32(255,255,255,255);
+    inline std::string CrosshairShape = "Dot"; // "Dot","Plus","Cross","Triangle","Pinwheel","Windmill1954"
+
+    inline bool IsRotating = false;
+    inline float RotationAngleDeg = 0.0f; // external code kann hochz?hlen
+    inline bool RainbowCrosshair = false;
+
+    // Constant for PI
+    inline constexpr double PI_DOUBLE = 3.14159265358979323846;
+}
+
+// ----- Hilfsfunktionen -----
+namespace {
+    inline ImVec2 RotatePoint(const ImVec2& p, const ImVec2& center, float angleRad)
+    {
+        if (angleRad == 0.0f) return p;
+        float dx = p.x - center.x;
+        float dy = p.y - center.y;
+        float ca = cosf(angleRad);
+        float sa = sinf(angleRad);
+        return ImVec2(center.x + dx * ca - dy * sa, center.y + dx * sa + dy * ca);
+    }
+
+    inline ImU32 HSVtoU32(float h, float s, float v, float a = 1.0f)
+    {
+        int i = (int)floorf(h * 6.0f);
+        float f = h * 6.0f - i;
+        float p = v * (1.0f - s);
+        float q = v * (1.0f - f * s);
+        float t = v * (1.0f - (1.0f - f) * s);
+        float r = 1, g = 1, b = 1;
+        switch (i % 6) {
+        case 0: r = v; g = t; b = p; break;
+        case 1: r = q; g = v; b = p; break;
+        case 2: r = p; g = v; b = t; break;
+        case 3: r = p; g = q; b = v; break;
+        case 4: r = t; g = p; b = v; break;
+        case 5: r = v; g = p; b = q; break;
+        }
+        return IM_COL32((int)(r*255),(int)(g*255),(int)(b*255),(int)(a*255));
+    }
+
+    inline ImU32 CrosshairActualColor()
+    {
+        if (!overlay::RainbowCrosshair) return overlay::CrosshairColor;
+        using namespace std::chrono;
+        auto now = high_resolution_clock::now();
+        auto ms = duration_cast<milliseconds>(now.time_since_epoch()).count();
+        float h = fmodf(static_cast<float>((ms / 1000.0) * 0.12), 1.0f);
+        return HSVtoU32(h, 0.9f, 0.9f);
+    }
+}
+
+// Add missing DrawFeatureList and DrawWatermark helper implementations
+static void DrawFeatureList(ImDrawList* dl, const ImVec2& display_size)
+{
+    using namespace overlay;
+    if (!IsFeatureListVisible || ActiveFeatures.empty()) return;
+    const float padding = 10.0f;
+    float y = 40.0f;
+    float right = 40.0f;
+    for (const auto& s : ActiveFeatures)
+    {
+        ImVec2 textSize = ImGui::CalcTextSize(s.c_str(), nullptr, false, 1000.0f);
+        float x = display_size.x - textSize.x - right;
+        dl->AddText(ImGui::GetFont(), (float)FeatureTextSize, ImVec2(x, y), FeatureTextColor, s.c_str());
+        y += FeatureTextSize + 6.0f;
+    }
+}
+
+static void DrawWatermark(ImDrawList* dl, const ImVec2& display_size)
+{
+    using namespace overlay;
+    if (!IsWatermarkVisible || WatermarkText.empty()) return;
+    ImVec2 textSize = ImGui::CalcTextSize(WatermarkText.c_str());
+    float left = 40.0f;
+    float y = display_size.y - (WatermarkSize * 2.2f);
+    dl->AddText(ImGui::GetFont(), (float)WatermarkSize, ImVec2(left, y), WatermarkColor, WatermarkText.c_str());
+}
+
+// ----- Zeichnen (ImGui DrawList) -----
+namespace overlay {
+    void DrawCrosshair(ImDrawList* dl, const ImVec2& center)
+    {
+        if (CrosshairSize <= 0 || LineThickness <= 0) return;
+
+        float angleRad = IsRotating ? (RotationAngleDeg * static_cast<float>(PI_DOUBLE) / 180.0f) : 0.0f;
+        ImU32 col = CrosshairActualColor();
+        float thickness = static_cast<float>((LineThickness > 1) ? LineThickness : 1);
+
+        std::string shp = CrosshairShape;
+        for (auto & c : shp) c = static_cast<char>(tolower(static_cast<unsigned char>(c)));
+
+        if (shp == "dot")
+        {
+            float d = static_cast<float>(CrosshairSize);
+            dl->AddCircleFilled(center, d * 0.5f, col);
+            return;
+        }
+
+        if (shp == "plus")
+        {
+            ImVec2 a = RotatePoint(ImVec2(center.x - CrosshairSize, center.y), center, angleRad);
+            ImVec2 b = RotatePoint(ImVec2(center.x + CrosshairSize, center.y), center, angleRad);
+            dl->AddLine(a, b, col, thickness);
+
+            ImVec2 c = RotatePoint(ImVec2(center.x, center.y - CrosshairSize), center, angleRad);
+            ImVec2 d = RotatePoint(ImVec2(center.x, center.y + CrosshairSize), center, angleRad);
+            dl->AddLine(c, d, col, thickness);
+            return;
+        }
+
+        if (shp == "cross")
+        {
+            int r = CrosshairSize;
+            ImVec2 a = RotatePoint(ImVec2(center.x - r, center.y - r), center, angleRad);
+            ImVec2 b = RotatePoint(ImVec2(center.x + r, center.y + r), center, angleRad);
+            ImVec2 c = RotatePoint(ImVec2(center.x + r, center.y - r), center, angleRad);
+            ImVec2 d = RotatePoint(ImVec2(center.x - r, center.y + r), center, angleRad);
+            dl->AddLine(a, b, col, thickness);
+            dl->AddLine(c, d, col, thickness);
+            return;
+        }
+
+        if (shp == "triangle")
+        {
+            int r = CrosshairSize;
+            ImVec2 p1 = RotatePoint(ImVec2(center.x, center.y - r), center, angleRad);
+            ImVec2 p2 = RotatePoint(ImVec2(center.x - (0.866f * r), center.y + r / 2.0f), center, angleRad);
+            ImVec2 p3 = RotatePoint(ImVec2(center.x + (0.866f * r), center.y + r / 2.0f), center, angleRad);
+            dl->AddTriangle(p1, p2, p3, col, thickness);
+            return;
+        }
+
+        if (shp == "pinwheel")
+        {
+            int r = CrosshairSize;
+            double start = PI_DOUBLE / 4.0;
+            for (int i = 0; i < 4; i++)
+            {
+                double ang = start + i * (PI_DOUBLE / 2.0);
+                float x1 = center.x + static_cast<float>(cos(ang) * (r * 0.35));
+                float y1 = center.y + static_cast<float>(sin(ang) * (r * 0.35));
+                float x2 = center.x + static_cast<float>(cos(ang) * r);
+                float y2 = center.y + static_cast<float>(sin(ang) * r);
+                ImVec2 p1 = RotatePoint(ImVec2(x1, y1), center, angleRad);
+                ImVec2 p2 = RotatePoint(ImVec2(x2, y2), center, angleRad);
+                dl->AddLine(p1, p2, col, thickness);
+            }
+            dl->AddCircleFilled(center, r * 0.12f, col);
+            return;
+        }
+
+        if (shp == "windmill1954")
+        {
+            int r = CrosshairSize;
+            int vTopY = static_cast<int>(center.y - (2.0f * r));
+            int vBotY = static_cast<int>(center.y + (2.0f * r));
+            int hHalf = static_cast<int>(2.0f * r);
+
+            dl->AddLine(RotatePoint(ImVec2(center.x, static_cast<float>(vTopY)), center, angleRad), RotatePoint(ImVec2(center.x, static_cast<float>(vBotY)), center, angleRad), col, thickness);
+            dl->AddLine(RotatePoint(ImVec2(center.x - hHalf, center.y), center, angleRad), RotatePoint(ImVec2(center.x + hHalf, center.y), center, angleRad), col, thickness);
+
+            int tip = static_cast<int>(2.0f * r);
+            ImVec2 pTop = RotatePoint(ImVec2(center.x, static_cast<float>(vTopY)), center, angleRad);
+            ImVec2 pTopEnd = RotatePoint(ImVec2(center.x + tip, static_cast<float>(vTopY)), center, angleRad);
+            ImVec2 pBot = RotatePoint(ImVec2(center.x, static_cast<float>(vBotY)), center, angleRad);
+            ImVec2 pBotEnd = RotatePoint(ImVec2(center.x - tip, static_cast<float>(vBotY)), center, angleRad);
+            ImVec2 pRight = RotatePoint(ImVec2(center.x + hHalf, center.y), center, angleRad);
+            ImVec2 pRightEnd = RotatePoint(ImVec2(center.x + hHalf, center.y + tip), center, angleRad);
+            ImVec2 pLeft = RotatePoint(ImVec2(center.x - hHalf, center.y), center, angleRad);
+            ImVec2 pLeftEnd = RotatePoint(ImVec2(center.x - hHalf, center.y - tip), center, angleRad);
+
+            dl->AddLine(pTop, pTopEnd, col, thickness);
+            dl->AddLine(pBot, pBotEnd, col, thickness);
+            dl->AddLine(pRight, pRightEnd, col, thickness);
+            dl->AddLine(pLeft, pLeftEnd, col, thickness);
+            return;
+        }
+    }
+
+    // ----- Implementation von draw_gui, benutzt die obigen Helfer -----
+    void draw_gui()
+    {
+        ImDrawList* dl = ImGui::GetBackgroundDrawList();
+        ImVec2 display_size = ImGui::GetIO().DisplaySize;
+
+        // Feature list (oben rechts)
+        DrawFeatureList(dl, display_size);
+
+        // Watermark (unten links)
+        DrawWatermark(dl, display_size);
+
+        // Sync crosshair settings from config so changes in menu apply immediately
+        {
+            static const char* _types[] = { "Cross", "Dot", "Plus", "Triangle", "Circle", "Windmill1954", "Pinwheel" };
+            CrosshairSize = config->crosshair.size;
+            LineThickness = config->crosshair.thickness;
+            int r = (int)(config->crosshair.color[0] * 255.0f);
+            int g = (int)(config->crosshair.color[1] * 255.0f);
+            int b = (int)(config->crosshair.color[2] * 255.0f);
+            int a = (int)(config->crosshair.color[3] * 255.0f);
+            CrosshairColor = IM_COL32(r, g, b, a);
+            int t = config->crosshair.type;
+            if (t < 0) t = 0; if (t >= (int)(sizeof(_types)/sizeof(_types[0]))) t = 0;
+            CrosshairShape = _types[t];
+            RainbowCrosshair = config->crosshair.rainbow;
+            IsRotating = config->crosshair.rotating;
+            if (IsRotating) {
+                float delta = ImGui::GetIO().DeltaTime;
+                RotationAngleDeg += config->crosshair.rotationSpeed * 60.0f * delta;
+                if (RotationAngleDeg > 360.0f) RotationAngleDeg = fmodf(RotationAngleDeg, 360.0f);
+            }
+        }
+
+        // Draw crosshair only if enabled in config
+        if (config->crosshair.enabled) {
+            ImVec2 center = ImVec2(display_size.x * 0.5f, display_size.y * 0.5f);
+            DrawCrosshair(dl, center);
+        }
+
+        // Hinweis: RotationAngleDeg kann auﬂerhalb hochgez‰hlt werden (z.B. in loop())
+    }
+}
+
+// Minimal implementations for functions declared in overlay.h to satisfy linker
+namespace window {
+    LRESULT WINAPI WndProc(HWND hWnd, UINT Msg, WPARAM wParam, LPARAM lParam)
+    {
+        if (ImGui_ImplWin32_WndProcHandler(hWnd, Msg, wParam, lParam))
+            return true;
+        return ::DefWindowProcW(hWnd, Msg, wParam, lParam);
+    }
+
+    void cleanup() {
+        // nothing to cleanup here in this module
+    }
+
+    bool create_window() {
+        // This module uses external window creation (load.h), so just return true
         return true;
-
-    switch (Msg)
-    {
-    case WM_SIZE:
-        return 0;
-
-    case WM_SYSCOMMAND:
-        if ((wParam & 0xfff0) == SC_KEYMENU)
-            return 0;
-        break;
-
-    case WM_DESTROY:
-        ::PostQuitMessage(0);
-        return 0;
-
-    default:
-        break;
     }
-    return ::DefWindowProc(hWnd, Msg, wParam, lParam);
+
+    bool create_device() {
+        // Device created elsewhere (load.h); return true
+        return true;
+    }
+
+    void new_frame() {
+        // Forward to ImGui new frame helpers if needed
+        ImGui_ImplDX11_NewFrame();
+        ImGui_ImplWin32_NewFrame();
+        ImGui::NewFrame();
+    }
+
+    void draw() {
+        // call the GUI draw implementation
+        overlay::draw_gui();
+    }
 }
 
+namespace overlay {
+    bool initialize(HWND window) {
+        target = window;
+        return true;
+    }
 
-bool window::create_device()
-{
-    if (!hwnd || width <= 0 || height <= 0)
-        return false;
+    bool scale() {
+        // scaling handled elsewhere; return true
+        return true;
+    }
 
-    DXGI_SWAP_CHAIN_DESC sd = {};
-    sd.BufferCount = 1;
-    sd.BufferDesc.Width = width;
-    sd.BufferDesc.Height = height;
-    sd.BufferDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
-    sd.BufferDesc.RefreshRate.Numerator = 1000;
-    sd.BufferDesc.RefreshRate.Denominator = 1;
-    sd.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
-    sd.OutputWindow = window::hwnd;
-    sd.SampleDesc.Count = 1;
-    sd.SampleDesc.Quality = 0;
-    sd.Windowed = TRUE;
-    sd.SwapEffect = DXGI_SWAP_EFFECT_DISCARD;
-    sd.Flags = DXGI_SWAP_CHAIN_FLAG_ALLOW_MODE_SWITCH;
-
-    const D3D_FEATURE_LEVEL featureLevelArray[] = { D3D_FEATURE_LEVEL_11_1, D3D_FEATURE_LEVEL_11_0 };
-    UINT create_device_flags = 0;
-    D3D_FEATURE_LEVEL feature_level;
-
-    directx::swap_chain = nullptr;
-    directx::device = nullptr;
-    directx::context = nullptr;
-
-    IDXGIFactory* dxgi_factory = nullptr;
-    HRESULT hr = CreateDXGIFactory(__uuidof(IDXGIFactory), (void**)&dxgi_factory);
-    if (FAILED(hr))
-        return false;
-
-    IDXGIAdapter* selected_adapter = nullptr;
-    SIZE_T max_dedicated_video_memory = 0;
-    IDXGIAdapter* adapter = nullptr;
-    UINT i = 0;
-
-    while (dxgi_factory->EnumAdapters(i, &adapter) != DXGI_ERROR_NOT_FOUND)
-    {
-        DXGI_ADAPTER_DESC adapter_desc;
-        adapter->GetDesc(&adapter_desc);
-        if (adapter_desc.DedicatedVideoMemory > max_dedicated_video_memory)
-        {
-            max_dedicated_video_memory = adapter_desc.DedicatedVideoMemory;
-            if (selected_adapter)
-                selected_adapter->Release();
-            selected_adapter = adapter;
+    void click_through(bool click) {
+        if (!target) return;
+        LONG_PTR ex = GetWindowLongPtr(target, GWL_EXSTYLE);
+        if (click) {
+            SetWindowLongPtr(target, GWL_EXSTYLE, ex & ~WS_EX_TRANSPARENT);
+        } else {
+            SetWindowLongPtr(target, GWL_EXSTYLE, ex | WS_EX_TRANSPARENT);
         }
-        else {
-            adapter->Release();
-        }
-        ++i;
     }
 
-    if (selected_adapter)
-    {
-        hr = D3D11CreateDeviceAndSwapChain(
-            selected_adapter,
-            D3D_DRIVER_TYPE_UNKNOWN,
-            nullptr,
-            create_device_flags,
-            featureLevelArray,
-            _countof(featureLevelArray),
-            D3D11_SDK_VERSION,
-            &sd,
-            &directx::swap_chain,
-            &directx::device,
-            &feature_level,
-            &directx::context
-        );
-        selected_adapter->Release();
-    }
-    else
-    {
-        hr = D3D11CreateDeviceAndSwapChain(
-            nullptr,
-            D3D_DRIVER_TYPE_HARDWARE,
-            nullptr,
-            create_device_flags,
-            featureLevelArray,
-            _countof(featureLevelArray),
-            D3D11_SDK_VERSION,
-            &sd,
-            &directx::swap_chain,
-            &directx::device,
-            &feature_level,
-            &directx::context
-        );
-    }
-
-    dxgi_factory->Release();
-
-    if (FAILED(hr))
-    {
-        hr = D3D11CreateDeviceAndSwapChain(
-            nullptr,
-            D3D_DRIVER_TYPE_WARP,
-            nullptr,
-            create_device_flags,
-            featureLevelArray,
-            _countof(featureLevelArray),
-            D3D11_SDK_VERSION,
-            &sd,
-            &directx::swap_chain,
-            &directx::device,
-            &feature_level,
-            &directx::context
-        );
-        if (FAILED(hr))
-            return false;
-    }
-
-    if (!directx::swap_chain || !directx::device || !directx::context)
-        return false;
-
-    ID3D11Texture2D* back_buffer = nullptr;
-    hr = directx::swap_chain->GetBuffer(0, IID_PPV_ARGS(&back_buffer));
-    if (FAILED(hr) || !back_buffer)
-        return false;
-
-    hr = directx::device->CreateRenderTargetView(back_buffer, nullptr, &directx::render_target_view);
-    back_buffer->Release();
-    back_buffer = nullptr;
-    if (FAILED(hr) || !directx::render_target_view)
-        return false;
-
-    directx::context->OMSetRenderTargets(1, &directx::render_target_view, nullptr);
-
-    D3D11_VIEWPORT viewport = {};
-    viewport.Width = static_cast<float>(width);
-    viewport.Height = static_cast<float>(height);
-    viewport.MinDepth = 0.0f;
-    viewport.MaxDepth = 1.0f;
-    viewport.TopLeftX = 0.0f;
-    viewport.TopLeftY = 0.0f;
-    directx::context->RSSetViewports(1, &viewport);
-
-    IMGUI_CHECKVERSION();
-    ImGui::CreateContext();
-    ImGuiIO& io = ImGui::GetIO();
-    io.IniFilename = nullptr;
-    ImGui::StyleColorsDark();
-
-    g_titleFont = io.Fonts->AddFontFromMemoryTTF(Arial, Arial_size, 17.0f);
-
-    g_defaultFont = io.Fonts->AddFontFromMemoryTTF(Arial, Arial_size, 15.0f);
-
-    ImGui_ImplWin32_Init(hwnd);
-    ImGui_ImplDX11_Init(directx::device, directx::context);
-
-
-    return true;
-}
-
-void window::new_frame()
-{
-    ImGui_ImplDX11_NewFrame();
-    ImGui_ImplWin32_NewFrame();
-    ImGui::NewFrame();
-}
-
-void window::draw()
-{
-    ImGui::EndFrame();
-    ImGui::Render();
-    static const float clearColor[4] = { 0.f, 0.f, 0.f, 0.f };
-    directx::context->OMSetRenderTargets(1, &directx::render_target_view, nullptr);
-    directx::context->ClearRenderTargetView(directx::render_target_view, clearColor);
-    ImGui_ImplDX11_RenderDrawData(ImGui::GetDrawData());
-    directx::swap_chain->Present(static_cast<int>(config->menu.vsync), 0);
-}
-
-void window::cleanup()
-{
-    if (window::hwnd)
-    {
-        ImGui_ImplDX11_Shutdown();
-        ImGui_ImplWin32_Shutdown();
-        ImGui::DestroyContext();
-        if (directx::render_target_view) { directx::render_target_view->Release(); directx::render_target_view = nullptr; }
-        if (directx::swap_chain) { directx::swap_chain->Release(); directx::swap_chain = nullptr; }
-        if (directx::context) { directx::context->Release(); directx::context = nullptr; }
-        if (directx::device) { directx::device->Release(); directx::device = nullptr; }
-        DestroyWindow(hwnd);
-    }
-}
-
-bool window::create_window()
-{
-    auto random_string = [](size_t length) -> const wchar_t*
-        {
-            const wchar_t charset[] = L"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
-            const size_t charsetSize = wcslen(charset);
-            wchar_t* randomString = new wchar_t[length + 1];
-            static bool seeded = false;
-            if (!seeded)
-            {
-                srand(static_cast<unsigned int>(time(nullptr)));
-                seeded = true;
-            }
-            for (size_t i = 0; i < length; ++i)
-            {
-                randomString[i] = charset[rand() % charsetSize];
-            }
-            randomString[length] = L'\0';
-            return randomString;
-        };
-
-    auto window_name = random_string(16);
-
-    WNDCLASSEX wc = {};
-    wc.cbSize = sizeof(WNDCLASSEX);
-    wc.style = CS_HREDRAW | CS_VREDRAW;
-    wc.lpfnWndProc = window::WndProc;
-    wc.hInstance = GetModuleHandle(nullptr);
-    wc.lpszClassName = window_name;
-    wc.hCursor = LoadCursor(nullptr, IDC_ARROW);
-    wc.hbrBackground = nullptr;
-
-    if (!RegisterClassEx(&wc))
-        return false;
-
-    window::width = GetSystemMetrics(SM_CXSCREEN);
-    window::height = GetSystemMetrics(SM_CYSCREEN);
-
-    window::hwnd = CreateWindowEx(
-        WS_EX_TOPMOST | WS_EX_TRANSPARENT | WS_EX_TOOLWINDOW,
-        window_name,
-        random_string(16),
-        WS_POPUP,
-        0, 0, window::width, window::height,
-        nullptr, nullptr,
-        wc.hInstance,
-        nullptr
-    );
-
-    if (!window::hwnd)
-    {
-        UnregisterClass(window_name, wc.hInstance);
-        return false;
-    }
-
-    MARGINS margin = { -1, -1, -1, -1 };
-    HRESULT hr = DwmExtendFrameIntoClientArea(window::hwnd, &margin);
-    if (FAILED(hr))
-    {
-        UnregisterClass(window_name, wc.hInstance);
-        DestroyWindow(window::hwnd);
-        window::hwnd = nullptr;
-        return false;
-    }
-
-    ShowWindow(window::hwnd, SW_SHOW);
-    return UpdateWindow(window::hwnd);
-}
-
-bool overlay::scale()
-{
-    static RECT old;
-
-    HWND foreground_window = GetForegroundWindow();
-
-    if (foreground_window == target)
-    {
-        SetWindowPos(window::hwnd, GetWindow(foreground_window, GW_HWNDPREV), 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE);
-        UpdateWindow(window::hwnd);
-    }
-
-    RECT rc = {};
-    POINT xy = {};
-
-    if (!GetClientRect(target, &rc))
-        return false;
-
-    if (!ClientToScreen(target, &xy))
-        return false;
-
-    rc.left = xy.x;
-    rc.top = xy.y;
-
-    if (rc.left != old.left || rc.right != old.right || rc.top != old.top || rc.bottom != old.bottom)
-    {
-        old = rc;
-
-        width = rc.right;
-        height = rc.bottom;
-
-        SetWindowPos(window::hwnd, nullptr, xy.x, xy.y, static_cast<int>(width), static_cast<int>(height), SWP_NOREDRAW);
-    }
-
-    return true;
-}
-
-void overlay::click_through(bool click)
-{
-    SetWindowLong(window::hwnd, GWL_EXSTYLE, click ? WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_TOOLWINDOW : WS_EX_TRANSPARENT | WS_EX_TOOLWINDOW);
-}
-
-bool overlay::initialize(HWND window)
-{
-    if (!window)
-        return false;
-
-    overlay::target = window;
-
-    if (!overlay::target)
-    {
-        overlay::target = 0;
-        return false;
-    }
-
-    if (!window::create_window())
-        return false;
-
-
-    if (!window::create_device())
-        return false;
-
-    return true;
-}
-
-void overlay::loop()
-{
-    globals->running = true;
-
-    MSG msg = { 0 };
-    while (globals->running && msg.message != WM_QUIT)
-    {
-        if (PeekMessage(&msg, nullptr, 0, 0, PM_REMOVE))
-        {
-            TranslateMessage(&msg);
-            DispatchMessage(&msg);
-            continue;
-        }
-
-        if (!overlay::scale())
-            break;
-
-        window::new_frame();
-
-        if (config->menu.streamproof)
-        {
-            SetWindowDisplayAffinity(window::hwnd, WDA_EXCLUDEFROMCAPTURE);
-        }
-        else
-        {
-            SetWindowDisplayAffinity(window::hwnd, WDA_NONE);
-        }
-
-        drawlist::Test();
-
-        if (config->menu.drawWatermark)
-            menu::DrawWatermark();
-
-        if (GetKeyState(config->menu.menuKey))
-        {
-            overlay::click_through(false);
-            menu::Draw();
-        }
-        else
-        {
-            overlay::click_through(true);
-        }
-
-        window::draw();
+    void loop() {
+        // This project uses a custom loop in load.h; leave empty.
     }
 }

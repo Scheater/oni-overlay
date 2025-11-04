@@ -134,6 +134,7 @@
     <ClCompile Include="external\ImGui\imgui_impl_win32.cpp" />
     <ClCompile Include="external\ImGui\imgui_tables.cpp" />
     <ClCompile Include="external\ImGui\imgui_widgets.cpp" />
+    <ClCompile Include="overlay\menu\menu.cpp" />
     <ClCompile Include="overlay\overlay.cpp" />
     <ClCompile Include="main.cpp" />
   </ItemGroup>
@@ -152,6 +153,7 @@
     <ClInclude Include="external\ImGui\json.hpp" />
     <ClInclude Include="external\ImGui\stb_image.h" />
     <ClInclude Include="overlay\load.h" />
+    <ClInclude Include="overlay\menu\menu.h" />
     <ClInclude Include="overlay\overlay.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
